@@ -1,8 +1,11 @@
 import jax.numpy as jnp
 import jax.image as jimg
 from flax import linen as nn
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from Utilities import ConditionalInstanceNorm2d as InstNorm
+from .Utilities import ConditionalInstanceNorm2d as InstNorm
 
 
 ### REFINE NET BLOCK SECTION ###

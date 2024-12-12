@@ -6,7 +6,7 @@ import flax
 from flax import linen as nn
 
 
-from DiffModel.Utilities import PositionalEmbedding, ResNetBlock, Attention
+from .Utilities import PositionalEmbedding, ResNetBlock, Attention
 
 
 

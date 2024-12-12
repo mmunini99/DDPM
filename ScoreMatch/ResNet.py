@@ -130,11 +130,8 @@ class ResNetBlock(nn.Module):
 
 if __name__ == "__main__":
     import os
-    from Dataset import load_data
     import jax
     import jax.numpy as jnp
-    train_data, _ = load_data(os.path.abspath("C:/Users/matte/Documents/JAX Tutorial/NCSN/datset_MNIST/"), 32, 32, 32, False, 32)
-    batch = next(iter(train_data))
     model = ResNetBlock(32, True, False, None, False)
     p = model.init(jax.random.PRNGKey(0), jnp.ones((1, 32, 32, 1)))
     res = jnp.ones((128, 32, 32, 1))
