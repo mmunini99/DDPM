@@ -206,7 +206,7 @@ class DiffusionModel(object):
         param_c = (self.T-3)/max(grid_time)
         # define the backward step on trajectory 
         for time, time_prev in tqdm(zip(reversed(grid_time), reversed(grid_time_shift))):
-            time_adj = int(param_c*(time+1))
+            time_adj = int(param_c*(time+1)) # here since the last element, by reversing, of this grid is 0, the plus one allows to compute the final denoising at step 1 --> as tsted in the paper
             time_adj_prev = int(param_c*(time_prev+1)) # rule to ensure that the last element -1 --> 0
             #check consistency sample
             if time_adj > self.T:
