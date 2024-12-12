@@ -8,9 +8,9 @@ from flax.training.train_state import TrainState
 import statistics as sts
 from tqdm.notebook import tqdm
 
-from ForwardProcess import forward_process
-from Utilities import PositionalEmbedding, ResNetBlock, Attention, loss_function
-from UNET import UNet
+from DiffModel.ForwardProcess import forward_process
+from DiffModel.Utilities import PositionalEmbedding, ResNetBlock, Attention, loss_function
+from DiffModel.UNET import UNet
 
 
 
