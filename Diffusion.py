@@ -145,32 +145,27 @@ class DiffusionModel(object):
 
         return denoised_image
     
-    def __single_sampling_DDIM(self, img_pert, pred, timestep, eta):
+    def __single_sampling_DDIM(self, img_pert, pred, timestep, timestep_prev, eta):
         '''
         DDIM if eta = 0
         if eta in [0;1[ --> trade-off between DDIM and DDPM.
         img_pert --> image passed. If single image : (1, height, width, 1)
         pred --> U-Net prediction based on batch_img_pert conditioned on timestep
+        Here, on alpha_t-1 it means the previoous values of alpha in the sub sequence and not the previous values in line --> timestep_prev
         '''
-        # load the data used in the forward denoising pass
+        # load the data used in the forward denoising pass 
         _, __, alpha_hat = self.fw.get_params()
-        if timestep == 0:
-            # define the components of the denoised image by DDIM from t to 0 : (img - const2*pred)/const3   
-            const2 = jnp.sqrt(1-jnp.take(alpha_hat, timestep)) # sqrt(1-alpha_t)
-            const3 = jnp.sqrt(jnp.take(alpha_hat, timestep)) # sqrt(alpha_t)
-            denoised_image = (img_pert-const2*pred)/const3
-        else:
-            # define the components of the denoised image by DDIM from t to t-1 : const1*(img - const2*pred)/const3 + const4*pred + sigma*gaussian_noise  
-            const1 = jnp.sqrt(jnp.take(alpha_hat, timestep-1)) # sqrt(alpha_t-1)
-            const2 = jnp.sqrt(1-jnp.take(alpha_hat, timestep)) # sqrt(1-alpha_t)
-            const3 = jnp.sqrt(jnp.take(alpha_hat, timestep)) # sqrt(alpha_t)
-            sigma = eta*jnp.sqrt((1-jnp.take(alpha_hat, timestep-1))/(1-jnp.take(alpha_hat, timestep)))*jnp.sqrt(1-(jnp.take(alpha_hat, timestep))/(jnp.take(alpha_hat, timestep-1)))
-            const4 = jnp.sqrt(1-jnp.take(alpha_hat, timestep-1)-sigma**2)
-            # generate a key for random noise --> gaussian
-            self.rng, rng_noise = random.split(self.rng, 2)
-            gauss_noise = random.normal(key=rng_noise, shape=img_pert.shape)
-            # compute denoised image at step t
-            denoised_image = const1*((img_pert-const2*pred)/(const3))+const4*pred+sigma*gauss_noise
+        # define the components of the denoised image by DDIM from t to t-1 : const1*(img - const2*pred)/const3 + const4*pred + sigma*gaussian_noise  
+        const1 = jnp.sqrt(jnp.take(alpha_hat, timestep_prev)) # sqrt(alpha_t-1)
+        const2 = jnp.sqrt(1-jnp.take(alpha_hat, timestep)) # sqrt(1-alpha_t)
+        const3 = jnp.sqrt(jnp.take(alpha_hat, timestep)) # sqrt(alpha_t)
+        sigma = eta*jnp.sqrt((1-jnp.take(alpha_hat, timestep_prev))/(1-jnp.take(alpha_hat, timestep)))*jnp.sqrt(1-(jnp.take(alpha_hat, timestep))/(jnp.take(alpha_hat, timestep_prev)))
+        const4 = jnp.sqrt(1-jnp.take(alpha_hat, timestep_prev)-sigma**2)
+        # generate a key for random noise --> gaussian
+        self.rng, rng_noise = random.split(self.rng, 2)
+        gauss_noise = random.normal(key=rng_noise, shape=img_pert.shape)
+        # compute denoised image at step t
+        denoised_image = const1*((img_pert-const2*pred)/(const3))+const4*pred+sigma*gauss_noise
         
         return denoised_image
 
@@ -206,15 +201,20 @@ class DiffusionModel(object):
         # first saving
         list_transition.append(img)
         # define the trajectory --> linear method
-        grid_time =  range(0, self.T, self.T // (num_step_inference-1)) 
-        param_c = self.T/len(grid_time)
+        grid_time =  list(range(0, self.T, self.T // (num_step_inference-1)) )
+        grid_time_shift = [-1] + grid_time[:-1]
+        param_c = (self.T-3)/max(grid_time)
         # define the backward step on trajectory 
-        for time in tqdm(reversed(grid_time)):
-            time_adj = int(param_c*time)
+        for time, time_prev in tqdm(zip(reversed(grid_time), reversed(grid_time_shift))):
+            time_adj = int(param_c*(time+1))
+            time_adj_prev = int(param_c*(time_prev+1)) # rule to ensure that the last element -1 --> 0
+            #check consistency sample
+            if time_adj > self.T:
+                time_adj = self.T
             # make the prediction  
             pred = self.model.apply({'params': self.trainer.params["params"]}, [img, jnp.full((1,), time_adj)])
             # denoise the image --> replace img with the new image
-            img = self.__single_sampling_DDIM(img, pred, time, eta)
+            img = self.__single_sampling_DDIM(img, pred, time_adj, time_adj_prev, eta)
             # save it
             list_transition.append(img)
 
