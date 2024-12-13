@@ -99,7 +99,11 @@ class NCSN(object):
             self.array_train_loss.append(loss_out) # append only for keeping track of results
 
         # cleaning procedure
-
+        del sigma_idx
+        del sigma
+        del noise_applied
+        del data_perturbed
+        del batch_data
         # compute the mean of the error
         avg_loss_epoch = jnp.mean(jnp.array(self.array_train_loss))
         # clean the list for storing loss values
