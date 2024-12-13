@@ -9,7 +9,7 @@ class ConvBlock(nn.Module):
     channels: int
 
     def setup(self):
-        self.conv = nn.Conv(self.channels, (3,3), padding="SAME")
+        self.conv = nn.Conv(self.channels, (3,3), padding="SAME", kernel_init=nn.initializers.kaiming_normal())
 
     def __call__(self, input):
         x = self.conv(input)
@@ -24,7 +24,7 @@ class DownConvPoolBlock(nn.Module):
     channels: int
 
     def setup(self):
-        self.conv = nn.Conv(self.channels, (3,3), padding="SAME")
+        self.conv = nn.Conv(self.channels, (3,3), padding="SAME", kernel_init=nn.initializers.kaiming_normal())
         self.pool = nn.avg_pool
 
     def __call__(self, input):
@@ -44,7 +44,7 @@ class AtrousConvBlock(nn.Module):
     stride_int : int
 
     def setup(self):
-        self.conv = nn.Conv(self.channels, (3,3), kernel_dilation=self.dil_int, padding="SAME", strides=(self.stride_int, self.stride_int)) # should be self.dil_int the padding
+        self.conv = nn.Conv(self.channels, (3,3), kernel_dilation=self.dil_int, padding="SAME", strides=(self.stride_int, self.stride_int), kernel_init=nn.initializers.kaiming_normal()) # should be self.dil_int the padding
 
     def __call__(self, input):
         x = self.conv(input)

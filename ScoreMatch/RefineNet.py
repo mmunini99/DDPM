@@ -1,9 +1,7 @@
 import jax.numpy as jnp
 import jax.image as jimg
 from flax import linen as nn
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 
 from .Utilities import ConditionalInstanceNorm2d as InstNorm
 
@@ -19,8 +17,8 @@ class RCU(nn.Module):
     channels : int 
 
     def setup(self):
-        self.conv1 = nn.Conv(self.channels, (3,3), padding="SAME")
-        self.conv2 = nn.Conv(self.channels, (3,3), padding="SAME")
+        self.conv1 = nn.Conv(self.channels, (3,3), padding="SAME", kernel_init=nn.initializers.kaiming_normal())
+        self.conv2 = nn.Conv(self.channels, (3,3), padding="SAME", kernel_init=nn.initializers.kaiming_normal())
 
         self.inst_n1 = InstNorm()
         self.inst_n2 = InstNorm()
@@ -45,29 +43,41 @@ class MRF(nn.Module):
     ''' 
 
     channels_res : int 
-    ref_presence : bool 
+    flag_last_block : bool 
 
 
     def setup(self):
-        # adapt the number of channels in RefineNet block(if present) to the one in ResNet --> feature maps of the same channels (the smallest one, so the one of ResNet block) 
-        self.conv_ref = nn.Conv(self.channels_res, (3,3), padding="SAME")
-        self.conv_res = nn.Conv(self.channels_res, (3,3), padding="SAME")     
-        # normalizer
-        self.inst_ref = InstNorm()
-        self.inst_res = InstNorm() 
+        if self.flag_last_block:
+            self.conv_res = nn.Conv(self.channels_res, (3,3), padding="SAME", kernel_init=nn.initializers.kaiming_normal()) 
+            self.inst_res = InstNorm()
+        else:
+            # adapt the number of channels in RefineNet block(if present) to the one in ResNet --> feature maps of the same channels (the smallest one, so the one of ResNet block) 
+            self.conv_ref = nn.Conv(self.channels_res, (3,3), padding="SAME", kernel_init=nn.initializers.kaiming_normal())
+            self.conv_res = nn.Conv(self.channels_res, (3,3), padding="SAME", kernel_init=nn.initializers.kaiming_normal())     
+            # normalizer
+            self.inst_ref = InstNorm()
+            self.inst_res = InstNorm() 
     
     def __call__(self, input):
         img_res, img_ref = input
-        y = self.inst_res(img_res)
-        y = self.conv_res(y)
-        if not self.ref_presence:
+        if self.flag_last_block:
+            y = self.inst_res(img_res)
+            y = self.conv_res(y)
+
+            return y
+        else:
+            y = self.inst_res(img_res)
+            y = self.conv_res(y)
             x = self.inst_ref(img_ref)
             x = self.conv_ref(x)
             x = jimg.resize(x, y.shape, method='bilinear')
 
-            return x+y
-        else:
-            return y
+            z = x+y
+
+            return z
+
+
+
 
 
 # Chained Residual Pooling
@@ -76,12 +86,13 @@ class CRP(nn.Module):
     ResNet + Pooling
     '''
     channels : int
+    dim_max_pool : int
 
     def setup(self):
         # define the Convolutional layers : 3 layers
-        self.conv1 = nn.Conv(self.channels, (3,3), padding="SAME")
-        self.conv2 = nn.Conv(self.channels, (3,3), padding="SAME")  
-        self.conv3 = nn.Conv(self.channels, (3,3), padding="SAME")     
+        self.conv1 = nn.Conv(self.channels, (3,3), padding="SAME", kernel_init=nn.initializers.kaiming_normal())
+        self.conv2 = nn.Conv(self.channels, (3,3), padding="SAME", kernel_init=nn.initializers.kaiming_normal())  
+        self.conv3 = nn.Conv(self.channels, (3,3), padding="SAME", kernel_init=nn.initializers.kaiming_normal())     
         # normalizer
         self.inst1 = InstNorm()
         self.inst2 = InstNorm() 
@@ -94,15 +105,15 @@ class CRP(nn.Module):
     def __call__(self, input):
         # first Residual Connection
         x = nn.elu(input)
-        x = self.max_pool1(x, window_shape=(5, 5), strides=(1, 1), padding='SAME')
+        x = self.max_pool1(x, window_shape=(self.dim_max_pool, self.dim_max_pool), strides=(1, 1), padding='SAME')
         x = self.inst1(x)
         x = self.conv1(x)
         # second Residual Connection
-        y = self.max_pool1(x, window_shape=(5, 5), strides=(1, 1), padding='SAME')
+        y = self.max_pool1(x, window_shape=(self.dim_max_pool, self.dim_max_pool), strides=(1, 1), padding='SAME')
         y = self.inst1(y)
         y = self.conv1(y)
         # third Residual Connection
-        z = self.max_pool1(y, window_shape=(5, 5), strides=(1, 1), padding='SAME')
+        z = self.max_pool1(y, window_shape=(self.dim_max_pool, self.dim_max_pool), strides=(1, 1), padding='SAME')
         z = self.inst1(z)
         z = self.conv1(z)
         # final 
@@ -126,7 +137,7 @@ class RefineNet(nn.Module):
             # define MRF block
             self.mrf = MRF(self.channels_res, self.flag_last_block)
             # define CRP block
-            self.crp = CRP(self.channels_res)
+            self.crp = CRP(self.channels_res, 2)
         else:
             # first 2 blocks for both ResNet output and previous RefineNet blocks
             self.cru1_res = RCU(self.channels_res)
@@ -138,7 +149,7 @@ class RefineNet(nn.Module):
             # define MRF block
             self.mrf = MRF(self.channels_res, self.flag_last_block)
             # define CRP block
-            self.crp = CRP(self.channels_res)
+            self.crp = CRP(self.channels_res, 5)
 
     def __call__(self, inputs):
         if self.flag_last_block: 
@@ -147,7 +158,7 @@ class RefineNet(nn.Module):
             x = self.cru1(img_res)
             x = self.cru2(x)
             # multi resolution fusion
-            x = self.mrf([x, _])
+            x = self.mrf([x, None])
             # chained residual pooling
             x = self.crp(x)
             # final adaptive convolution
@@ -170,6 +181,9 @@ class RefineNet(nn.Module):
             z = self.cru3(z)
 
             return z
+        
+
+
 
 
 if __name__ == "__main__":
@@ -179,11 +193,11 @@ if __name__ == "__main__":
     import jax.numpy as jnp
     train_data, _ = load_data(os.path.abspath("C:/Users/matte/Documents/JAX Tutorial/NCSN/datset_MNIST/"), 32, 32, 32, False, 32)
     batch = next(iter(train_data))
-    model = RefineNet(16, None, True)
+    model = RefineNet(16, 32, False)
     p = model.init(jax.random.PRNGKey(0), [jnp.ones((1, 32, 32, 16)),jnp.ones((1, 16, 16, 32))])
     res = jnp.ones((128, 32, 32, 16))
     ref = jnp.ones((128, 16, 16, 32))
-    output = model.apply(p, [res, None])
+    output = model.apply(p, [res, ref])
     
     print(output.shape)
 

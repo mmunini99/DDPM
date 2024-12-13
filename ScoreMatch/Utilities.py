@@ -3,6 +3,7 @@ from jax import random, vmap
 from scipy.stats import norm as Norm
 from scipy.optimize import fsolve
 from flax import linen as nn
+from collections import defaultdict
 
 def init_first_sigma(train_dataloader):
     '''
@@ -71,7 +72,7 @@ def sequence_sigma(sigma1, sigmaL, length):
     '''
     list_sigma = jnp.exp(jnp.linspace(jnp.log(sigma1), jnp.log(sigmaL), length)).astype(jnp.float32)
 
-    return list_sigma
+    return jnp.array(list_sigma)
 
 
 def normal_with_mean_and_stddev(mean=1.0, stddev=0.2):
@@ -81,6 +82,37 @@ def normal_with_mean_and_stddev(mean=1.0, stddev=0.2):
     def initializer(key, shape, dtype=jnp.float32):
         return random.normal(key, shape, dtype) * stddev + mean
     return initializer
+
+
+def loss_function(pred, noise_applied, sigma):
+    # unique sigma
+    unique_sigmas = jnp.unique(sigma)
+    list_loss = []
+
+    # groupby operation --> loss for each sigma
+    for sg in unique_sigmas:
+        # index of batches to select
+        idx = jnp.where(sigma == sg)[0]
+
+        # get relative pred and noise applied
+        pred_select = pred[idx]
+        pred_noise = noise_applied[idx]
+
+        # compute loss
+        loss = 0.5*(sg**2)*(((pred_select+pred_noise/sg)**2).sum(axis=(1, 2, 3)))
+
+        mean_loss = jnp.mean(loss)        
+
+        list_loss.append(mean_loss)
+
+    
+
+    loss = jnp.mean(jnp.array(list_loss))
+
+    return loss
+
+
+
 
 
 class CustomError(Exception):
@@ -138,20 +170,16 @@ class ConditionalInstanceNorm2d(nn.Module):
 
 
 
-# if __name__ == "__main__":
-#     import os
-#     from Dataset import load_data
-#     import jax
-#     import jax.numpy as jnp
-#     train_data, _ = load_data(os.path.abspath("C:/Users/matte/Documents/JAX Tutorial/NCSN/datset_MNIST/"), 32, 32, 32, False, 32)
-#     batch = next(iter(train_data))
-#     model = ConditionalInstanceNorm2d()
-#     p = model.init(jax.random.PRNGKey(0), jnp.ones((1, 32, 32, 16)))
-#     res = jnp.ones((128, 32, 32, 16))
-#     ref = jnp.ones((128, 16, 16, 32))
-#     output = model.apply(p, res)
+if __name__ == "__main__":
+    import jax
+    import jax.numpy as jnp
+    from jax import random 
+    l = sequence_sigma(1,0.1,10)
+    pred = jax.random.normal(jax.random.PRNGKey(0), (128, 32, 32, 3))
+    noise_applied = jax.random.normal(jax.random.PRNGKey(1), (128, 32, 32, 3))
+    a = loss_function(pred, noise_applied, l)
     
-#     print(output.shape)
+    print(a)
 
     
 
