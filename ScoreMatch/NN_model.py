@@ -8,22 +8,6 @@ from .ResNet import ConvBlock as CB
 from .Utilities import ConditionalInstanceNorm2d as InstNorm
 
 
-class foo(nn.Module):
-    chi: int
-    cho: int
-
-    def setup(self):
-        self.a = CB(self.chi)
-        self.b = CB(self.cho)
-    
-    def __call__(self, x):
-        x= self.a(x)
-        x= self.b(x)
-        return x
-
-
-
-
 class ScoreMatchNN(nn.Module):
     '''
     Architecture used as Score Matching Neural Network.
@@ -97,9 +81,12 @@ class ScoreMatchNN(nn.Module):
         if sigma == None:
             return x
         else:
-            x = x/sigma[:,None,None,None] # NCSN without noise conditioning --> Technique 3 (see NCSN paper 10/23/2020)
-
-            return x
+            if self.training:
+                x = x/sigma[:,None,None,None] # NCSN without noise conditioning --> Technique 3 (see NCSN paper 10/23/2020)
+                return x
+            else:
+                x = x/sigma # since the sampling will pass only a scalar and not a vector --> no needed the broadcasting
+                return x
         
 
 if __name__ == "__main__":

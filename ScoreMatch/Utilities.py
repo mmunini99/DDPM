@@ -98,7 +98,7 @@ def loss_function_denoise(pred, noise_applied, sigma):
         pred_noise = noise_applied[idx]
 
         # compute loss
-        loss = 0.5*(sg**2)*(((pred_select+pred_noise/sg)**2).sum(axis=(1, 2, 3)))
+        loss = (sg**2)*(((pred_select+pred_noise/sg)**2).sum(axis=(1, 2, 3)))
 
         mean_loss = jnp.mean(loss)        
 
@@ -106,7 +106,7 @@ def loss_function_denoise(pred, noise_applied, sigma):
 
     
 
-    loss = jnp.mean(jnp.array(list_loss))
+    loss = 0.5*jnp.mean(jnp.array(list_loss))
 
     return loss
 

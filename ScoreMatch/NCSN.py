@@ -11,6 +11,9 @@ from .NN_model import ScoreMatchNN as Net
 from .Utilities import loss_function_denoise, sequence_sigma, loss_function_explicit
 
 
+class TrainState(TrainState):
+  batch_stats: any
+
 class NCSN(object):
     '''
     Define the NCSN based on RefineNet network unconditioned by the stendard deviation.
@@ -48,11 +51,12 @@ class NCSN(object):
         self.model = Net(self.channels_ini, self.seq_dim_channels, self.channels_out, training_flag)
         
 
-        if training_flag:
+        
         # Feed in a sample so it knows how the input is composed
-            params = self.model.init(self.rng, [sample_image_format, sample_sigma_format]) # here the shape of input is passed --> list of image batch and array of sigma
-        else:
-            params = self.model.init(self.rng, [sample_image_format, sample_sigma_format])
+        var = self.model.init(self.rng, [sample_image_format, sample_sigma_format]) # here the shape of input is passed --> list of image batch and array of sigma
+        params  = var['params']
+        batch_stats = var['batch_stats']
+
             
 
         # define the optimizer of the model
@@ -64,7 +68,9 @@ class NCSN(object):
         # create the compelte training setup
         self.trainer = TrainState.create(apply_fn=self.model.apply,
                                     params=params,
-                                    tx = self.optimezer)  
+                                    tx = self.optimezer,
+                                    batch_stats=batch_stats)  
+        
         if self.denoise_sm:
             # define the sigma array
             self.sigma_array = sequence_sigma(self.sigma_ini, self.sigma_fin, self.L)
@@ -73,13 +79,16 @@ class NCSN(object):
         # first define the tool to allow JAX to compute the loss and gradient
         def loss_computation(params):
             # compute the predictions
-            pred = self.trainer.apply_fn(params, [perturbed_image, sigma])
+            pred, updates = self.trainer.apply_fn({'params': params, 'batch_stats': self.trainer.batch_stats}, [perturbed_image, sigma], mutable=['batch_stats'])
             value_loss = loss_function_denoise(pred, noise_applied, sigma)
-            return value_loss
+                       
+            return value_loss, updates
+        
         # compute the loss and gradients --> forward prop.
-        loss, grad = value_and_grad(loss_computation)(self.trainer.params)
+        (loss, upt), grad = value_and_grad(loss_computation, has_aux = True)(self.trainer.params)
         # backward prop. --> optimization step of NN
         self.trainer = self.trainer.apply_gradients(grads=grad)
+        self.trainer = self.trainer.replace(batch_stats=upt['batch_stats'])
 
         return loss
     
@@ -154,7 +163,7 @@ class NCSN(object):
 
     def training(self, dataset):
         # create the model and complete the setup
-        self.__init_model__(False)
+        self.__init_model__(True)
         # choose how to train the model
         if self.denoise_sm:
             for idx in range(self.n_epoch):
@@ -166,6 +175,37 @@ class NCSN(object):
                 print("Loss at epoch ", idx, " is ", avg_loss_epoch)
 
 
+    def annealed_L_sampling(self, eps):
+        # recal the model 
+        self.model_trained = Net(self.channels_ini, self.seq_dim_channels, self.channels_out, False)
+        # define the key for initialize teh noisy image
+        self.rng, key_x0 = random.split(self.rng, 2)
+        # init the starting noisy image
+        img = random.uniform(key_x0, shape=(1, self.height, self.width, 1), minval=0, maxval=1)
+        for i in tqdm(range(self.L)):
+            alpha = eps*self.sigma_array[i]/self.sigma_array[-1] # compute the step size of Langevin equation --> eps*sigma_i/sigma_L
+            for time in range(self.T): # run the SDE for a period T with fixed sigma
+                self.rng, key_noise = random.split(self.rng, 2)
+                pred = self.model_trained.apply({'params': self.trainer.params, 'batch_stats': self.trainer.batch_stats}, [img, self.sigma_array[i]], mutable=False)
+                z = random.normal(key_noise, shape=(1, self.height, self.width, 1)) # white noise
+                img = img + alpha*pred + jnp.sqrt(2*alpha)*z
+        
+        pred_last = self.model_trained.apply({'params': self.trainer.params, 'batch_stats': self.trainer.batch_stats}, [img, self.sigma_array[-1]], mutable=False)
+        # remove unwanted noise using Tweedie's formula
+        img = img + (self.sigma_array[-1]**2)*pred_last
+
+        return img
+
+
+
+
+
+
+
+        
+
+
+
     
 if __name__ == "__main__":
     import os
@@ -174,5 +214,6 @@ if __name__ == "__main__":
     import jax.numpy as jnp
     jax.config.update("jax_debug_nans", False)
     train_data, _ = load_data(os.path.abspath("C:/Users/matte/Documents/JAX Tutorial/NCSN/datset_MNIST/"), 32, 32, 32, False, 64)
-    model = NCSN(True, 42, 32, 1, (1,1,1,1), 32, 32, 1e-5, False, 1, 0.1, 10, None, None, 2, 32)
+    model = NCSN(True, 42, 32, 1, (1,1,1,1), 32, 32, 1e-5, False, 1, 0.1, 10, None, 10, 2, 32)
     model.training(train_data)
+    model.annealed_L_sampling(0.1)
