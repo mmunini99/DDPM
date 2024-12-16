@@ -1,5 +1,6 @@
 import jax.numpy as jnp
 from flax import linen as nn
+import jax.image as jimg
 
 from .RefineNet import RefineNet as RFN
 from .ResNet import ResNetBlock as RSB
@@ -7,9 +8,21 @@ from .ResNet import ConvBlock as CB
 from .Utilities import ConditionalInstanceNorm2d as InstNorm
 
 
+class foo(nn.Module):
+    chi: int
+    cho: int
+
+    def setup(self):
+        self.a = CB(self.chi)
+        self.b = CB(self.cho)
+    
+    def __call__(self, x):
+        x= self.a(x)
+        x= self.b(x)
+        return x
 
 
-import jax.image as jimg
+
 
 class ScoreMatchNN(nn.Module):
     '''
@@ -81,9 +94,12 @@ class ScoreMatchNN(nn.Module):
         x = nn.elu(x)
         x = self.conv_end(x) # reshape with initial channels
 
-        x = x/sigma[:,None,None,None] # NCSN without noise conditioning --> Technique 3 (see NCSN paper 10/23/2020)
+        if sigma == None:
+            return x
+        else:
+            x = x/sigma[:,None,None,None] # NCSN without noise conditioning --> Technique 3 (see NCSN paper 10/23/2020)
 
-        return x
+            return x
         
 
 if __name__ == "__main__":

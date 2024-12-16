@@ -3,7 +3,6 @@ from jax import random, vmap
 from scipy.stats import norm as Norm
 from scipy.optimize import fsolve
 from flax import linen as nn
-from collections import defaultdict
 
 def init_first_sigma(train_dataloader):
     '''
@@ -84,7 +83,7 @@ def normal_with_mean_and_stddev(mean=1.0, stddev=0.2):
     return initializer
 
 
-def loss_function(pred, noise_applied, sigma):
+def loss_function_denoise(pred, noise_applied, sigma):
     # unique sigma
     unique_sigmas = jnp.unique(sigma)
     list_loss = []
@@ -112,6 +111,10 @@ def loss_function(pred, noise_applied, sigma):
     return loss
 
 
+def loss_function_explicit(jacobian, score):
+    loss_batch =  jnp.trace(jacobian) + 0.5*jnp.linalg.norm(score)
+
+    return jnp.mean(loss_batch)
 
 
 
