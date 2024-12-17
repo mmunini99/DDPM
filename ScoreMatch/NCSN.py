@@ -1,7 +1,7 @@
 from jax import random
 from jax import value_and_grad
 import jax.numpy as jnp
-from jax import jacfwd
+from jax import jacfwd, jvp
 from optax import adam, clip, chain
 from flax.training.train_state import TrainState
 import statistics as sts
@@ -91,27 +91,56 @@ class NCSN(object):
         return loss
     
 
-    def __update_explicit__(self, batch_image):
+    def __update_explicit__(self, batch_image, sliced):
         # first define the tool to allow JAX to compute the loss and gradient
-        def loss_computation(params):
-            # compute the predictions --> score
-            pred, updates = self.trainer.apply_fn({'params': params, 'batch_stats': self.trainer.batch_stats}, [batch_image, None], mutable=['batch_stats'])
-            # define the fucntion on which compute the jacobian
-            def func(x):
-                pred, _ = self.trainer.apply_fn({'params': params, 'batch_stats': self.trainer.batch_stats}, [batch_image, None], mutable=['batch_stats'])
-                return pred
-            # compute the jacobian
-            jac = jacfwd(func)(batch_image)
-            value_loss = loss_function_explicit(jac, pred)
-            return value_loss, updates
-        
-        # compute the loss and gradients --> forward prop.
-        (loss, upt), grad = value_and_grad(loss_computation, has_aux = True)(self.trainer.params)
-        # backward prop. --> optimization step of NN
-        self.trainer = self.trainer.apply_gradients(grads=grad)
-        self.trainer = self.trainer.replace(batch_stats=upt['batch_stats'])
+        if sliced:
+            def loss_computation(params):
+                # compute the predictions --> score
+                pred, updates = self.trainer.apply_fn({'params': params, 'batch_stats': self.trainer.batch_stats}, [batch_image, None], mutable=['batch_stats'])
+                # generate random vactor for projection
+                self.rng, key_proj = random.split(self.rng, 2)
+                z = random.normal(key_proj, shape=pred.shape)
+                # compute the first loss element
+                loss_a = 0.5*jnp.linalg.norm(pred)
+                # define the fucntion on which compute the jacobian --> Hessian in theory since score network has a gradient as output
+                def func(x):
+                    pred, _ = self.trainer.apply_fn({'params': params, 'batch_stats': self.trainer.batch_stats}, [batch_image, None], mutable=['batch_stats'])
+                    return pred
+                # compute the jacobian vector
+                proj1 = jvp(func, (batch_image,), (z,))[1] # first projection
+                proj2 = jnp.sum(z * proj1, axis=-1) # second projection --> (batch_size, height, width, channels)
+                loss_b = jnp.mean(proj2)
+                value_loss = loss_a + loss_b
+                return value_loss, updates
+            
+            # compute the loss and gradients --> forward prop.
+            (loss, upt), grad = value_and_grad(loss_computation, has_aux = True)(self.trainer.params)
+            # backward prop. --> optimization step of NN
+            self.trainer = self.trainer.apply_gradients(grads=grad)
+            self.trainer = self.trainer.replace(batch_stats=upt['batch_stats'])
 
-        return loss
+            return loss
+
+        else:
+            def loss_computation(params):
+                # compute the predictions --> score
+                pred, updates = self.trainer.apply_fn({'params': params, 'batch_stats': self.trainer.batch_stats}, [batch_image, None], mutable=['batch_stats'])
+                # define the fucntion on which compute the jacobian --> Hessian in theory since score network has a gradient as output
+                def func(x):
+                    pred, _ = self.trainer.apply_fn({'params': params, 'batch_stats': self.trainer.batch_stats}, [batch_image, None], mutable=['batch_stats'])
+                    return pred
+                # compute the jacobian
+                jac = jacfwd(func)(batch_image)
+                value_loss = loss_function_explicit(jac, pred)
+                return value_loss, updates
+            
+            # compute the loss and gradients --> forward prop.
+            (loss, upt), grad = value_and_grad(loss_computation, has_aux = True)(self.trainer.params)
+            # backward prop. --> optimization step of NN
+            self.trainer = self.trainer.apply_gradients(grads=grad)
+            self.trainer = self.trainer.replace(batch_stats=upt['batch_stats'])
+
+            return loss
     
 
     
@@ -144,10 +173,10 @@ class NCSN(object):
 
         return avg_loss_epoch 
     
-    def __single_step_explicit__(self, dataset):
+    def __single_step_explicit__(self, dataset, sliced):
         for i, batch_data in enumerate(tqdm(dataset)):
             # back. prop., optimize and get the loss value
-            loss_out = self.__update_explicit__(batch_data)
+            loss_out = self.__update_explicit__(batch_data, sliced)
 
             self.array_train_loss.append(loss_out) # append only for keeping track of results
 
@@ -162,7 +191,7 @@ class NCSN(object):
         return avg_loss_epoch
     
 
-    def training(self, dataset):
+    def training(self, dataset, sliced):
         # create the model and complete the setup
         self.__init_model__(True)
         # choose how to train the model
@@ -172,7 +201,7 @@ class NCSN(object):
                 print("Loss at epoch ", idx, " is ", avg_loss_epoch)
         else:
             for idx in range(self.n_epoch):
-                avg_loss_epoch = self.__single_step_explicit__(dataset)
+                avg_loss_epoch = self.__single_step_explicit__(dataset, sliced)
                 print("Loss at epoch ", idx, " is ", avg_loss_epoch)
 
 
@@ -215,6 +244,6 @@ if __name__ == "__main__":
     import jax.numpy as jnp
     jax.config.update("jax_debug_nans", False)
     train_data, _ = load_data(os.path.abspath("C:/Users/matte/Documents/JAX Tutorial/NCSN/datset_MNIST/"), 32, 32, 32, False, 64)
-    model = NCSN(True, 42, 32, 1, (1,1,1,1), 32, 32, 1e-5, False, 1, 0.1, 10, None, 10, 2, 32)
-    model.training(train_data)
+    model = NCSN(False, 42, 32, 1, (1,1,1,1), 32, 32, 1e-5, False, 1, 0.1, 10, None, 10, 2, 32)
+    model.training(train_data, True)
     model.annealed_L_sampling(0.1)
