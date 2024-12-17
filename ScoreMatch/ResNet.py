@@ -1,6 +1,8 @@
 import jax.numpy as jnp
 from flax import linen as nn
 
+
+
 class ConvBlock(nn.Module):
     '''
     Define the block for the beginning and the ending of the ResNet architecture.

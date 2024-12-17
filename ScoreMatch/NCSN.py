@@ -50,7 +50,6 @@ class NCSN(object):
         # define the model
         self.model = Net(self.channels_ini, self.seq_dim_channels, self.channels_out, training_flag)
         
-
         
         # Feed in a sample so it knows how the input is composed
         var = self.model.init(self.rng, [sample_image_format, sample_sigma_format]) # here the shape of input is passed --> list of image batch and array of sigma
@@ -71,9 +70,8 @@ class NCSN(object):
                                     tx = self.optimezer,
                                     batch_stats=batch_stats)  
         
-        if self.denoise_sm:
-            # define the sigma array
-            self.sigma_array = sequence_sigma(self.sigma_ini, self.sigma_fin, self.L)
+
+        self.sigma_array = sequence_sigma(self.sigma_ini, self.sigma_fin, self.L)
 
     def __update_denoise__(self, perturbed_image, noise_applied, sigma):
         # first define the tool to allow JAX to compute the loss and gradient
@@ -97,18 +95,21 @@ class NCSN(object):
         # first define the tool to allow JAX to compute the loss and gradient
         def loss_computation(params):
             # compute the predictions --> score
-            #pred = self.trainer.apply_fn(params, [batch_image, None])
-            pred = self.trainer.apply_fn(params, batch_image)
+            pred, updates = self.trainer.apply_fn({'params': params, 'batch_stats': self.trainer.batch_stats}, [batch_image, None], mutable=['batch_stats'])
             # define the fucntion on which compute the jacobian
-            func = lambda x: self.trainer.apply_fn(params, [x, None])
+            def func(x):
+                pred, _ = self.trainer.apply_fn({'params': params, 'batch_stats': self.trainer.batch_stats}, [batch_image, None], mutable=['batch_stats'])
+                return pred
             # compute the jacobian
             jac = jacfwd(func)(batch_image)
             value_loss = loss_function_explicit(jac, pred)
-            return value_loss
+            return value_loss, updates
+        
         # compute the loss and gradients --> forward prop.
-        loss, grad = value_and_grad(loss_computation)(self.trainer.params)
+        (loss, upt), grad = value_and_grad(loss_computation, has_aux = True)(self.trainer.params)
         # backward prop. --> optimization step of NN
         self.trainer = self.trainer.apply_gradients(grads=grad)
+        self.trainer = self.trainer.replace(batch_stats=upt['batch_stats'])
 
         return loss
     
