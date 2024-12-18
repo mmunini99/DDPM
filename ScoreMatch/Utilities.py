@@ -39,11 +39,16 @@ def init_ratio_sigma(h, w):
         arg2 = jnp.sqrt(2*d)*(x-1)-3*x
         return Norm.cdf(arg1)-Norm.cdf(arg2)-0.5
     # get solution --> interval R_o+ since variance > 0
-    solution = fsolve(eq, [1.1])
-    if jnp.abs(eq(solution[0])) > 1e-2:
+    def grid_search(d, x_start=0.01, x_end=1.1, num_points=1000):
+        x_grid = jnp.linspace(x_start, x_end, num_points)
+        values = jnp.array([eq(x) for x in x_grid])
+        best_x = x_grid[jnp.argmin(jnp.abs(values))]  # Find x where eq(x) is closest to 0
+        return best_x
+    gamma = grid_search(d)
+    if jnp.abs(eq(gamma)) > 1e-2:
         raise CustomError("The solver for finding the noise scale did not work. Please set noise_scale with a custom value.")
     
-    return solution[0]
+    return gamma
 
 def config_eps_Langevin(T, last_sigma, gamma):
     '''
@@ -58,11 +63,17 @@ def config_eps_Langevin(T, last_sigma, gamma):
         arg3 = -(2*x)/((s-s*(1-x/s)**2))
         return arg1*arg2+arg3-1.0
     # get solution --> interval R_o+ since variance > 0
-    solution = fsolve(eq, [1e-6])
-    if jnp.abs(eq(solution[0])) > 1e-2:
-        raise CustomError("The solver for finding the noise scale did not work. Please set eps with a custom value.")
+    def grid_search(x_start=1e-7, x_end=1e-2, num_points=10000):
+        x_grid = jnp.linspace(x_start, x_end, num_points)
+        values = jnp.array([eq(x) for x in x_grid])
+        best_x = x_grid[jnp.argmin(jnp.abs(values))]  # Find x where eq(x) is closest to 0
+        return best_x
+    eps = grid_search()
+    print(eq(eps))
+    # if jnp.abs(eq(eps)) > 1e-2:
+    #     raise CustomError("The solver for finding the noise scale did not work. Please set eps with a custom value.")
     
-    return solution[0]
+    return eps
 
 
 def sequence_sigma(sigma1, sigmaL, length):
@@ -177,12 +188,21 @@ if __name__ == "__main__":
     import jax
     import jax.numpy as jnp
     from jax import random 
+    import os
+    import sys
+    parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+    # Add the parent directory to the Python path
+    sys.path.append(parent_dir)
+    from Dataset import load_data
     l = sequence_sigma(1,0.1,10)
-    pred = jax.random.normal(jax.random.PRNGKey(0), (128, 32, 32, 3))
-    noise_applied = jax.random.normal(jax.random.PRNGKey(1), (128, 32, 32, 3))
-    a = loss_function(pred, noise_applied, l)
+    train_data, _ = load_data(os.path.abspath("C:/Users/matte/Documents/JAX Tutorial/NCSN/datset_MNIST/"), 32, 32, 32, False, 32*10)
     
-    print(a)
+    val = init_first_sigma(train_data)
+    print(val)
+    gamma = init_ratio_sigma(32,32)
+    print(gamma)
+    eps = config_eps_Langevin(1000, 0.01, gamma)
+    print(eps)
 
     
 
