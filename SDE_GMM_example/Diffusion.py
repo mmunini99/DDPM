@@ -7,6 +7,7 @@ from optax.losses import squared_error
 from flax.training.train_state import TrainState
 import statistics as sts
 from tqdm.notebook import tqdm
+from scipy.integrate import solve_ivp
 
 from ForwardProcess import forward_process
 from Utilities import loss_function
@@ -29,7 +30,7 @@ class DiffusionModel(object):
     image shape data: (batch size, height, width, 1)
     '''
 
-    def __init__(self, setseed, dimension, UNET_scaling_tuple, shape_data, lr, nesterov_bool, n_epoch, T, beta_lb, beta_ub, batch_size):
+    def __init__(self, setseed, dimension, UNET_scaling_tuple, shape_data, lr, nesterov_bool, n_epoch, N, beta_lb, beta_ub, eps_lb, batch_size):
         self.setseed = setseed
         self.dimension = dimension
         self.UNET_scaling_tuple = UNET_scaling_tuple
@@ -37,13 +38,14 @@ class DiffusionModel(object):
         self.lr = lr
         self.nesterov_bool = nesterov_bool
         self.n_epoch = n_epoch
-        self.T = T
+        self.N = N
         self.beta_lb = beta_lb
         self.beta_ub = beta_ub
+        self.eps_lb = eps_lb
         self.batch_size = batch_size
 
-        # # define the DDPM forward process --> init it!
-        self.fw = forward_process(T = self.T, beta_lb = self.beta_lb, beta_ub = self.beta_ub)      
+        # define the DDPM forward process --> init it!
+        self.fw = forward_process(N = self.N, beta_lb = self.beta_lb, beta_ub = self.beta_ub)
 
         # list for storing data
         self.array_train_loss = []
@@ -75,8 +77,13 @@ class DiffusionModel(object):
                                     params=params,
                                     tx = self.optimezer,
                                     batch_stats=batch_stats)    
+        # define the array of noise
+        self.timestep_base = jnp.linspace(self.eps_lb/self.N, 1/self.N, self.N)
+        self.timestep_base_rev = self.timestep_base[::-1]
+        
     
-    def __update__(self, perturbed_data, noise_applied, timestep):
+    def __update__(self, perturbed_data, noise_applied, idx_array):
+        timestep = jnp.take(self.timestep_base, idx_array)
         # first define the tool to allow JAX to compute the loss and gradient
         def loss_computation(params):
             # compute the predictions
@@ -95,22 +102,22 @@ class DiffusionModel(object):
         for i, batch_data in enumerate(tqdm(dataset)):
             # generate 2 sub-rng --> do not use original rng (good practice)
             self.rng, rng_timestep, rng_gauss_noise = random.split(self.rng, 3)
-            # generate the array of tiemstep using the random key generated above --> array of same lenght of the batch size of data
-            timestep = random.randint(rng_timestep, shape=(batch_data.shape[0],), minval=0, maxval=self.T)
+            # generate the array of idx using the random key generated above --> array of same lenght of the batch size of data
+            idx_array = random.randint(rng_timestep, shape=(batch_data.shape[0],), minval=0, maxval=self.N)
             # get the actual data to pass to the U-Net: firstly batch of perturbed data; secondly the target noise
             # to do this we need to call the forward pocess of the fw class --> use the second rng key 
-            batch_data_pert, batch_noise_applied = self.fw.fp(rng_gauss_noise, batch_data, timestep)
+            batch_data_pert, batch_noise_applied = self.fw.fp(rng_gauss_noise, batch_data, idx_array)
             # back. prop., optimize and get the loss value
-            loss_out = self.__update__(batch_data_pert, batch_noise_applied, timestep)
+            loss_out = self.__update__(batch_data_pert, batch_noise_applied, idx_array)
 
             self.array_train_loss.append(loss_out) # append only for keeping track of results
 
         # cleaning procedure
-        del rng_timestep
-        del rng_gauss_noise
-        del timestep
-        del batch_data_pert
-        del batch_noise_applied
+        # del rng_timestep
+        # del rng_gauss_noise
+        # del idx_array
+        # del batch_data_pert
+        # del batch_noise_applied
         # compute the mean of the error
         avg_loss_epoch = jnp.mean(jnp.array(self.array_train_loss))
         # clean the list for storing loss values
@@ -126,107 +133,52 @@ class DiffusionModel(object):
             avg_loss_epoch = self.__single_step__(dataset)
             print("Loss at epoch ", idx, " is ", avg_loss_epoch)
 
-
-    def __single_sampling_DDPM__(self, img_pert, pred, timestep):
-        '''
-        DDPM
-        img_pert --> image passed. If single image : (1, height, width, 1)
-        pred --> U-Net prediction based on batch_img_pert conditioned on timestep
-        '''
-        # load the data used in the forward denoising pass
-        beta, alpha, alpha_hat = self.fw.get_params()
-        # define the components of the denoised image by DDPM from t to t-1 : const1*(img - const2*pred) + sigma*gaussian_noise
-        const1 = 1/(jnp.sqrt(jnp.take(alpha, timestep))) # 1/sqrt(alpha_t)
-        const2 = (1-jnp.take(alpha, timestep))/(jnp.sqrt(1-jnp.take(alpha_hat, timestep))) # 1-alpha_t/sqrt(1-alpha_hat_t)
-        # condition to apply white noise perturbation
-        if timestep == 0:
-            denoised_image = const1*(img_pert-const2*pred)
-        else:
-            # generate a key for random noise --> gaussian
-            self.rng, rng_noise = random.split(self.rng, 2)
-            gauss_noise = random.normal(key=rng_noise, shape=img_pert.shape)
-            # define sigma_t = beta_t*((1-alpha_hat_(t-1))/(1-alpha_hat_(t)))
-            sigma = jnp.take(beta, timestep)*((1-jnp.take(alpha_hat, timestep-1))/(1-jnp.take(alpha_hat, timestep)))
-            denoised_image = const1*(img_pert-const2*pred) + sigma*gauss_noise
-
-        return denoised_image
     
-    def __single_sampling_DDIM(self, img_pert, pred, timestep, timestep_prev, eta):
-        '''
-        DDIM if eta = 0
-        if eta in [0;1[ --> trade-off between DDIM and DDPM.
-        img_pert --> image passed. If single image : (1, height, width, 1)
-        pred --> U-Net prediction based on batch_img_pert conditioned on timestep
-        Here, on alpha_t-1 it means the previoous values of alpha in the sub sequence and not the previous values in line --> timestep_prev
-        '''
-        # load the data used in the forward denoising pass 
-        _, __, alpha_hat = self.fw.get_params()
-        # define the components of the denoised image by DDIM from t to t-1 : const1*(img - const2*pred)/const3 + const4*pred + sigma*gaussian_noise  
-        const1 = jnp.sqrt(jnp.take(alpha_hat, timestep_prev)) # sqrt(alpha_t-1)
-        const2 = jnp.sqrt(1-jnp.take(alpha_hat, timestep)) # sqrt(1-alpha_t)
-        const3 = jnp.sqrt(jnp.take(alpha_hat, timestep)) # sqrt(alpha_t)
-        sigma = eta*jnp.sqrt((1-jnp.take(alpha_hat, timestep_prev))/(1-jnp.take(alpha_hat, timestep)))*jnp.sqrt(1-(jnp.take(alpha_hat, timestep))/(jnp.take(alpha_hat, timestep_prev)))
-        const4 = jnp.sqrt(1-jnp.take(alpha_hat, timestep_prev)-sigma**2)
-        # generate a key for random noise --> gaussian
-        self.rng, rng_noise = random.split(self.rng, 2)
-        gauss_noise = random.normal(key=rng_noise, shape=img_pert.shape)
-        # compute denoised image at step t
-        denoised_image = const1*((img_pert-const2*pred)/(const3))+const4*pred+sigma*gauss_noise
-        
-        return denoised_image
-
-
     def sampling_DDPM(self):
+        # define the beta used
+        array_beta = self.fw.get_params()
         # generate a key for random noise --> gaussian
         self.rng, rng_sampling = random.split(self.rng, 2)
         # define a list to store the T transition
         list_transition = []
         # define the initial noise --> white noise --> make shape for model init
-        img = random.normal(rng_sampling, (1, self.shape))
+        data = random.normal(rng_sampling, (1, self.shape))
         # first saving
-        list_transition.append(img)
+        list_transition.append(data)
         # define the recursive mechanism
-        for time in tqdm(reversed(range(0, self.T-1))):
-            # make the prediction
-            pred = self.model.apply({'params': self.trainer.params, 'batch_stats': self.trainer.batch_stats}, [img, jnp.full((1,), time)], training = False,  mutable=False)
-            # denoise the image --> replace img with the new image
-            img = self.__single_sampling_DDPM__(img, pred, time)
+        for t_idx in tqdm(range(0, len(self.timestep_base_rev)-1)):
+            time = self.timestep_base_rev[t_idx]
+            time_prev = self.timestep_base_rev[t_idx+1]
+            # define the noise for RK45-Maruyama
+            self.rng, rng_rev = random.split(self.rng, 2)
+            z = random.normal(rng_rev, (1, self.shape))
+            # define the DRIFT term
+            dft = -0.5*(array_beta[0] + time*(array_beta[1]-array_beta[0]))
+            # define the DIFFUSION term
+            dff = jnp.sqrt(array_beta[0] + time*(array_beta[1]-array_beta[0]))
+            # define the function to compute the deterministic part
+            def ode_function(t, input):
+                # make the prediction
+                score = self.model.apply({'params': self.trainer.params, 'batch_stats': self.trainer.batch_stats}, [input, jnp.full((1,), t)], training = False,  mutable=False)
+
+                return dft - (dff**2)*score
+            # simulate the trajectory due to deterministic component
+            det_comp = solve_ivp(ode_function, (time, time_prev), data.squeeze(), method='RK45')
+            # transform data shape
+            det_comp = det_comp.y[:, 1][jnp.newaxis, :]
+            # compute Maruyama component / stochastic
+            sto_comp = dff*jnp.sqrt(1/self.N)*z
+            # obtain the denoised data
+            data = data - det_comp + sto_comp
+
+            
             # save it
-            list_transition.append(img)
+            list_transition.append(data)
 
 
         return list_transition
 
-    def sampling_DDIM(self, num_step_inference, eta): # add method linear and quadratic
-        # generate a key for random noise --> gaussian
-        self.rng, rng_sampling = random.split(self.rng, 2)
-        # define a list to store the T transition
-        list_transition = []
-        # define the initial noise --> white noise --> make shape for model init
-        img = random.normal(rng_sampling, (1, self.shape))
-        # first saving
-        list_transition.append(img)
-        # define the trajectory --> linear method
-        grid_time =  list(range(0, self.T, self.T // (num_step_inference-1)) )
-        grid_time_shift = [-1] + grid_time[:-1]
-        param_c = (self.T-3)/max(grid_time)
-        # define the backward step on trajectory 
-        for time, time_prev in tqdm(zip(reversed(grid_time), reversed(grid_time_shift))):
-            time_adj = int(param_c*(time+1)) # here since the last element, by reversing, of this grid is 0, the plus one allows to compute the final denoising at step 1 --> as tsted in the paper
-            time_adj_prev = int(param_c*(time_prev+1)) # rule to ensure that the last element -1 --> 0
-            #check consistency sample
-            if time_adj > self.T:
-                time_adj = self.T
-            # make the prediction  
-            pred = self.model.apply({'params': self.trainer.params, 'batch_stats': self.trainer.batch_stats}, [img, jnp.full((1,), time_adj)], training = False,  mutable=False)
-            # denoise the image --> replace img with the new image
-            img = self.__single_sampling_DDIM(img, pred, time_adj, time_adj_prev, eta)
-            # save it
-            list_transition.append(img)
-
-
-        return list_transition
-
+   
 
 
 
@@ -242,13 +194,10 @@ if __name__ == '__main__':
 
     # Generate the dataset
     dataset, mean, var  = build_dataset(n_rows, n_samples_per_row, means, variances, weights, 32)
-    model = DiffusionModel(42, 32, (6,4,2), 400, 1e-5, False, 2, 10,  0.00001, 0.02, 32)
+    model = DiffusionModel(42, 32, (6,4,2), 400, 1e-5, False, 4, 20,  0.1, 20, 1e-4, 32)
     model.training(dataset)
     l = model.sampling_DDPM()
-    ll = model.sampling_DDIM(4, 0.01)
     print(len(l))
-    print(len(ll))
-
 
 
 

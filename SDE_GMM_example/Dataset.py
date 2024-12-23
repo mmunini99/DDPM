@@ -1,5 +1,5 @@
 import numpy as np
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import MinMaxScaler
 from torch.utils.data import Dataset
 import torch.utils.data as data
 import torch
@@ -26,10 +26,10 @@ def generate_univariate_gmm_dataset(n_rows, n_samples_per_row, means, variances,
     return dataset
 
 def scaling(dataset):
-    scaler = StandardScaler()
+    scaler = MinMaxScaler(feature_range=(-1, 1))
     dataset_normalized = scaler.fit_transform(dataset)
 
-    return dataset_normalized, scaler.mean_.mean(), scaler.scale_.mean()
+    return dataset_normalized, scaler.min_.mean(), scaler.scale_.mean()
 
 def numpy_collate(batch):
     if isinstance(batch[0], np.ndarray):
