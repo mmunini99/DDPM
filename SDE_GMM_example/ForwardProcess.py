@@ -41,3 +41,17 @@ class forward_process(object):
         self.__setting__()
         return self.beta
 
+if __name__ == '__main__':
+    from Dataset import build_dataset
+    n_rows = 64  # Total number of rows in the dataset
+    n_samples_per_row = 400  # Samples per row (from GMM)
+    means = [0, 5, -5]  # Means of the Gaussian components
+    variances = [1, 0.5, 0.78]  # Variances of the components
+    weights = [0.4, 0.4, 0.2]  # Mixing coefficients (must sum to 1)
+    key = random.PRNGKey(0)
+    # Generate the dataset
+    dataset, mean, var  = build_dataset(n_rows, n_samples_per_row, means, variances, weights, 32)
+    data = next(iter(dataset))[0][None, :]
+    print(data.shape)
+    foo = forward_process(1000, 0.1, 20)
+    foo.fp(key, data, 4)

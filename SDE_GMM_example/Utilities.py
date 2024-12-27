@@ -13,10 +13,15 @@ from flax.linen import initializers
 from optax.losses import squared_error
 
 
-# define the loss function
+# define the loss function simpliefied of DDPM
 def loss_function(pred, true):
     loss = jnp.mean(squared_error(pred, true))
     return loss
+
+
+# define the loss function indicated in the SDE paper
+def loss_function_sde(score, marg, const):
+    loss = (1/const)*jnp.sum((score-marg)**2)
 
 
 

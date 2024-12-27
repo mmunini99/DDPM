@@ -11,6 +11,32 @@ from Utilities import PositionalEmbedding, ResNetBlock
 
 
 
+class UNet1(nn.Module):
+  dim: int 
+  dim_scale_factor: tuple 
+  out: int
+
+
+  @nn.compact # simpler since there are for loop
+  def __call__(self, inputs, training):
+    input, time = inputs
+
+    x = nn.Dense(features=self.dim, kernel_init=initializers.xavier_uniform())(input)
+    x = nn.BatchNorm(use_running_average=not training)(x)
+    x = nn.relu(x)
+    time_emb = PositionalEmbedding(self.dim, self.dim*4)(time) # here the number of embeddings is choosen from empirical performance (it could be added as hyper-parameter)
+    # Middle block
+    x = ResNetBlock(self.dim_scale_factor, self.dim_scale_factor)(x, time_emb)
+    x = nn.BatchNorm(use_running_average=not training)(x)
+    x = ResNetBlock(self.dim_scale_factor, self.dim_scale_factor)(x, time_emb) # shape here --> (batch_size, height/8, width/8, chan*8)
+
+    x = nn.BatchNorm(use_running_average=not training)(x)    
+    x = nn.Dense(features=self.out, kernel_init=initializers.xavier_uniform())(x)
+
+    return x
+
+
+
 class UNet(nn.Module):
   dim: int 
   dim_scale_factor: tuple 
@@ -68,7 +94,7 @@ if __name__== "__main__":
   key = jax.random.PRNGKey(0)
   # Generate the dataset
   dataset, mean, var  = build_dataset(n_rows, n_samples_per_row, means, variances, weights, 32)
-  model = UNet(32, (4,2))
+  model = UNet1(400, (200), 400)
   i_t = jnp.ones(1)
   time = jax.random.normal(key, 1)
   i_d = jnp.ones((1, 400))
